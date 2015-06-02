@@ -11,19 +11,39 @@
  */
 package org.mule.modules.ssh.multiplexer;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.security.Security;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
+import net.schmizz.sshj.Config;
+import net.schmizz.sshj.DefaultConfig;
 import net.schmizz.sshj.SSHClient;
+import net.schmizz.sshj.common.Factory.Named;
 import net.schmizz.sshj.common.IOUtils;
+import net.schmizz.sshj.common.KeyType;
 import net.schmizz.sshj.common.StreamCopier;
 import net.schmizz.sshj.connection.channel.direct.Session;
 import net.schmizz.sshj.connection.channel.direct.Session.Command;
 import net.schmizz.sshj.connection.channel.direct.Session.Shell;
+import net.schmizz.sshj.signature.Signature;
+import net.schmizz.sshj.signature.SignatureDSA;
+import net.schmizz.sshj.signature.SignatureECDSA;
+import net.schmizz.sshj.signature.SignatureRSA;
 import net.schmizz.sshj.transport.TransportException;
+import net.schmizz.sshj.transport.kex.KeyExchange;
+import net.schmizz.sshj.transport.verification.OpenSSHKnownHosts;
+import net.schmizz.sshj.transport.verification.PromiscuousVerifier;
 import net.schmizz.sshj.userauth.UserAuthException;
+import net.schmizz.sshj.userauth.keyprovider.FileKeyProvider;
+import net.schmizz.sshj.userauth.keyprovider.PKCS8KeyFile;
+import net.schmizz.sshj.userauth.keyprovider.PKCS8KeyFile.Factory;
+import net.schmizz.sshj.userauth.password.PasswordUtils;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
@@ -36,13 +56,7 @@ import org.mule.api.MuleContext;
 import org.mule.api.MuleEvent;
 import org.mule.api.MuleException;
 import org.mule.api.MuleMessage;
-import org.mule.api.annotations.Configurable;
-import org.mule.api.annotations.Connect;
-import org.mule.api.annotations.ConnectionIdentifier;
-import org.mule.api.annotations.Connector;
-import org.mule.api.annotations.Disconnect;
-import org.mule.api.annotations.Processor;
-import org.mule.api.annotations.ValidateConnection;
+import org.mule.api.annotations.*;
 import org.mule.api.annotations.display.Password;
 import org.mule.api.annotations.lifecycle.Start;
 import org.mule.api.annotations.param.ConnectionKey;
@@ -93,7 +107,23 @@ public class SshConnector implements MuleContextAware {
 	 * context will be passed from one invocation to the next.
 	 */
 	@Configurable
+	@Default(value="false")
 	private boolean shellMode = false;
+	
+	/**
+	 * if true, verification of host fingerprint against the known_hosts file will NOT be
+	 * performed.
+	 */
+	@Configurable
+	@Default(value="false")
+	private boolean disableKnownHostsVerification = false;
+	
+	/**
+	 * Location of the known_hosts file in OpenSSH format
+	 */
+	@Configurable
+	@Optional
+	private String knownHostsFile = "";
 	
 	/**
 	 * The flow that will receive callback invocations
@@ -145,38 +175,156 @@ public class SshConnector implements MuleContextAware {
     /**
      * Starts a connection
      * @param username the username for the login
-     * @param password the password for the login
+     * @param password the password for the login or passphrase of the private key if privateKeyFile is not empty
+     * @param location of the private key if using key-based authentication (provide passphrase through the password argument)
      * @param host the address for the target host
      * @param port TCP port number in which the host is listening
      * @throws ConnectionException if an error occurs connecting
      */
     @Connect
-    public void connect(@ConnectionKey String username, @Password String password, String host, Integer port) throws ConnectionException {
-    	this.client = new SSHClient();
+	@TestConnectivity(active=false)
+    public void connect(@ConnectionKey String username, @Password String password, @Optional String privateKeyFile, String host, Integer port) throws ConnectionException {
 
+    	//TODO: REFACTOR. Currently, no check is performed on the known_hosts file to determine the appropriate signature
+    	//type for the host. The client will only check the first type offered by the server (matching the supported ones 
+    	//from the setSignatureFactories options). This causes that if RSA is offered first, host validation will assume RSA signature exists on
+    	//the known_hosts file. If an RSA entry is not on the file, but a DSA, it WON'T be validated, failing the known_host validation process.
+    	//The workaround is to try connection with 2 clients, one with (RSA, DSA) and the other with (DSA, RSA). The one that succeeds is used 
+    	//as the client moving forward.
+    	Config configDSAFirst = new DefaultConfig();
+    	Config configRSAFirst = new DefaultConfig();
+    	
+    	configDSAFirst.setSignatureFactories(
+			Arrays.<net.schmizz.sshj.common.Factory.Named<Signature>>asList(
+    			
+    		    new net.schmizz.sshj.common.Factory.Named<Signature>() {
+
+    		        @Override
+    		        public Signature create() {
+    		            return new SignatureDSA();
+    		        }
+
+    		        @Override
+    		        public String getName() {
+    		            return KeyType.DSA.toString();
+    		        }
+
+    		    },
+    		    new net.schmizz.sshj.common.Factory.Named<Signature>() {
+
+    		        @Override
+    		        public Signature create() {
+    		            return new SignatureRSA();
+    		        }
+
+    		        @Override
+    		        public String getName() {
+    		            return KeyType.RSA.toString();
+    		        }
+
+    		    }
+		    )
+	    );
+	    
+    	configRSAFirst.setSignatureFactories(
+			Arrays.<net.schmizz.sshj.common.Factory.Named<Signature>>asList(
+    		    	
+    		    new net.schmizz.sshj.common.Factory.Named<Signature>() {
+
+    		        @Override
+    		        public Signature create() {
+    		            return new SignatureRSA();
+    		        }
+
+    		        @Override
+    		        public String getName() {
+    		            return KeyType.RSA.toString();
+    		        }
+
+    		    },
+    		    new net.schmizz.sshj.common.Factory.Named<Signature>() {
+
+    		        @Override
+    		        public Signature create() {
+    		            return new SignatureDSA();
+    		        }
+
+    		        @Override
+    		        public String getName() {
+    		            return KeyType.DSA.toString();
+    		        }
+
+    		    }
+    		)
+    	);
+    			
+    	SSHClient clientRSAFirst = new SSHClient(configRSAFirst);
+    	SSHClient clientDSAFirst = new SSHClient(configDSAFirst);
+    	
     	try {
-    		this.client.loadKnownHosts();
+    		Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider()); 
+    		if (this.disableKnownHostsVerification) {
+    			logger.warn("KNOWN HOST VERIFICATION IS DISABLED -- HOST IS NOT AUTHENTICATED");
+    			clientRSAFirst.addHostKeyVerifier(new PromiscuousVerifier());
+    			clientDSAFirst.addHostKeyVerifier(new PromiscuousVerifier());
+    		} else {
+	    		if (this.knownHostsFile != null && !this.knownHostsFile.isEmpty()) {
+	    			logger.warn("Loading known hosts file from " + this.knownHostsFile);
+	    			File knownHosts = new File(this.knownHostsFile);
+	    			if (!knownHosts.exists() || !knownHosts.canRead()) {
+	    				throw new ConnectionException(ConnectionExceptionCode.UNKNOWN, "", "Error loading known hosts: Can't read " + this.knownHostsFile);
+	    			}
+	    			clientRSAFirst.loadKnownHosts(knownHosts);
+	    			clientDSAFirst.loadKnownHosts(knownHosts);
+	    		} else {
+	    			logger.warn("Loading known hosts file from default locations");
+	    			clientRSAFirst.loadKnownHosts();
+	    			clientDSAFirst.loadKnownHosts();
+	    		}
+    		}
     	} catch (IOException e) {
-    		throw new ConnectionException(ConnectionExceptionCode.UNKNOWN, e.getMessage(), "Error loading known hosts");
+    		throw new ConnectionException(ConnectionExceptionCode.UNKNOWN, e.getMessage(), "Error loading known hosts", e);
     	}
     	
     	
     	if (this.timeout != null) {
-    		this.client.setTimeout(this.timeout);
-    		this.client.getTransport().setTimeout(this.timeout);
+    		clientDSAFirst.setTimeout(this.timeout);
+    		clientRSAFirst.setTimeout(this.timeout);
+    		clientDSAFirst.getTransport().setTimeoutMs(this.timeout);
+    		clientRSAFirst.getTransport().setTimeoutMs(this.timeout);
     	}
     	
     	try {
-    		this.client.connect(host, port);
+    		clientRSAFirst.connect(host, port);
+    		this.client = clientRSAFirst;
+    	} catch (TransportException e) {
+    		logger.info("RSA signature failed, trying DSA");
+    		try {
+        		clientDSAFirst.connect(host, port);
+        		this.client = clientDSAFirst;
+        	} catch (TransportException e2) {
+        		logger.info("DSA and RSA signature failed");
+        		throw new ConnectionException(ConnectionExceptionCode.CANNOT_REACH, e2.getMessage(), String.format("Could not reach ssh server at %s:%d", host, port), e2);
+        	} catch (IOException e3) {
+        		throw new ConnectionException(ConnectionExceptionCode.CANNOT_REACH, e3.getMessage(), String.format("Could not reach ssh server at %s:%d", host, port), e3);
+        	}
     	} catch (IOException e) {
-    		throw new ConnectionException(ConnectionExceptionCode.CANNOT_REACH, e.getMessage(), String.format("Could not reach ssh server at %s:%d", host, port));
+    		throw new ConnectionException(ConnectionExceptionCode.CANNOT_REACH, e.getMessage(), String.format("Could not reach ssh server at %s:%d", host, port), e);
     	}
     	
     	try {
-    		this.client.authPassword(username, password);
-    		this.session = this.client.startSession();
+    		if (privateKeyFile == null || privateKeyFile.isEmpty()) {
+    			logger.debug("Private key file location is empty, attempting username/password auth");
+    			this.client.authPassword(username, password);
+    		} else {
+    			logger.debug("Attempting public key auth from file " + privateKeyFile);
+    			FileKeyProvider provider = (new PKCS8KeyFile.Factory()).create();
+    			provider.init(new File(privateKeyFile), PasswordUtils.createOneOff(password.toCharArray()));
+    			this.client.authPublickey(username, provider);
+    		}	
+			this.session = this.client.startSession();
     	} catch (UserAuthException e) {
-    		throw new ConnectionException(ConnectionExceptionCode.INCORRECT_CREDENTIALS, e.getMessage(), "Could not login");
+    		throw new ConnectionException(ConnectionExceptionCode.INCORRECT_CREDENTIALS, e.getMessage(), "Could not login", e);
     	} catch (TransportException e) {
     		this.throwCannotReachException(e);
     	} catch (net.schmizz.sshj.connection.ConnectionException e) {
@@ -373,5 +521,36 @@ public class SshConnector implements MuleContextAware {
 		this.muleContext = context;
 		
 	}
+
+
+	/**
+	 * @return the Knwon hosts file
+	 */
+	public String getKnownHostsFile() {
+		return knownHostsFile;
+	}
+
+
+	public void setKnownHostsFile(String knownHostsFile) {
+		this.knownHostsFile = knownHostsFile;
+	}
+
+
+	/**
+	 * @return True if known hosts verification is disabled
+	 */
+	public boolean isDisableKnownHostsVerification() {
+		return disableKnownHostsVerification;
+	}
+
+
+	public void setDisableKnownHostsVerification(
+			boolean disableKnownHostsVerification) {
+		this.disableKnownHostsVerification = disableKnownHostsVerification;
+	}
+	
+	
+	
+	
 	
 }

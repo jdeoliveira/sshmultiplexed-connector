@@ -34,7 +34,7 @@ http://www.mulesoft.org/schema/mule/ssh http://www.mulesoft.org/schema/mule/ssh/
 
 	<context:property-placeholder location="ssh.test.properties" /> 
     
-    <ssh:config name="singleMode" timeout="10000" callbackFlowName="flow-callback" shellMode="false" receiverBufferSize="10000">
+    <ssh:config name="singleMode" disableKnownHostsVerification="false" timeout="10000" callbackFlowName="flow-callback" shellMode="false" knownHostsFile="/Users/jdeoliveira/.ssh/known_hosts" receiverBufferSize="10000">
 		<ssh:connection-pooling-profile
 			maxActive="10" maxIdle="10" 
 			exhaustedAction="WHEN_EXHAUSTED_GROW"
@@ -42,7 +42,7 @@ http://www.mulesoft.org/schema/mule/ssh http://www.mulesoft.org/schema/mule/ssh/
         <reconnect count="5" frequency="1000"/>
 	</ssh:config>
 	
-	<ssh:config name="shellMode" timeout="10000" callbackFlowName="flow-callback" shellMode="true" receiverBufferSize="10000">
+	<ssh:config name="shellMode" disableKnownHostsVerification="false"  timeout="10000" callbackFlowName="flow-callback" shellMode="true" knownHostsFile="/Users/jdeoliveira/.ssh/known_hosts" receiverBufferSize="10000">
 		<ssh:connection-pooling-profile
 			maxActive="10" maxIdle="10" 
 			exhaustedAction="WHEN_EXHAUSTED_GROW"
@@ -50,7 +50,10 @@ http://www.mulesoft.org/schema/mule/ssh http://www.mulesoft.org/schema/mule/ssh/
         <reconnect count="5" frequency="1000"/>
 	</ssh:config>
 	
-	
+	<flow name="publicKeyAuthTest" doc:name="flow-publicKeyAuth">
+        <ssh:send username="${ssh.user}" password="${ssh.keypassphrase}" privateKeyFile="${ssh.keyfile}" content="ls" host="${ssh.host}" port="${ssh.port}" config-ref="singleMode"/>
+    </flow>
+    
     <flow name="singleCallTest" doc:name="flow-sync">
         <ssh:send username="${ssh.user}" password="${ssh.pass}" content="ls" host="${ssh.host}" port="${ssh.port}" config-ref="singleMode"/>
     </flow>

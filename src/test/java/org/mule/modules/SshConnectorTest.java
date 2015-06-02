@@ -38,6 +38,12 @@ public class SshConnectorTest extends FunctionalTestCase
     	
     }
     
+    @Test
+    public void publicKeyAuth() throws Exception {
+    	runFlowAndExpect("publicKeyAuthTest");
+    	Thread.sleep(5000L);
+    }
+    
     /**
     * Run the flow specified by name and assert equality on the expected output
     *

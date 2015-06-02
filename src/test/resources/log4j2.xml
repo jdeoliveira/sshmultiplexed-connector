@@ -1,0 +1,22 @@
+<Configuration>
+    
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%-5p %d [%t] %c: %m%n"/>
+        </Console>
+    </Appenders>
+    
+    <Loggers>
+        <AsyncLogger name="net.schmizz.sshj" level="DEBUG"/>
+        <AsyncRoot level="DEBUG">
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+    <Loggers>
+        <AsyncLogger name="org.mule.modules.ssh" level="DEBUG"/>
+        <AsyncRoot level="DEBUG">
+            <AppenderRef ref="Console"/>
+        </AsyncRoot>
+    </Loggers>
+  
+</Configuration>

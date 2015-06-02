@@ -11,7 +11,7 @@
 	<parent>
 		<groupId>org.mule.tools.devkit</groupId>
 		<artifactId>mule-devkit-parent</artifactId>
-		<version>3.4.0</version>
+		<version>3.6.1</version>
 	</parent>
 
 	<properties>
@@ -33,12 +33,12 @@
 		<dependency>
 			<groupId>org.bouncycastle</groupId>
 			<artifactId>bcprov-jdk15on</artifactId>
-			<version>1.47</version>
+			<version>1.52</version>
 		</dependency>
 		<dependency>
 			<groupId>org.bouncycastle</groupId>
 			<artifactId>bcpkix-jdk15on</artifactId>
-			<version>1.47</version>
+			<version>1.52</version>
 		</dependency>
 		<dependency>
 			<groupId>com.jcraft</groupId>
@@ -46,6 +46,12 @@
 			<version>1.0.7</version>
 			<scope>provided</scope>
 		</dependency>
+		<dependency>
+			<groupId>net.schmizz</groupId>
+			<artifactId>sshj</artifactId>
+			<version>0.10.0</version>
+		</dependency>
+
 	</dependencies>
 
 	<repositories>
